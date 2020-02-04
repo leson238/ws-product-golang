@@ -1,35 +1,66 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
 
 type counters struct {
 	sync.Mutex
-	view  int
-	click int
+	view            int
+	click           int
+	contentSelected string
+}
+
+type values struct {
+	// JSON encoder can only see field starts with capital letter
+	Views  string `json:"views"`
+	Clicks string `json:"click"`
+}
+
+type userInfo struct {
+	sync.Mutex
+	timeStamp time.Time
+	reqCount  int
 }
 
 var (
-	c = counters{}
-
-	content = []string{"sports", "entertainment", "business", "education"}
+	c        = counters{}
+	contents = []string{"sports", "entertainment", "business", "education"}
 )
 
+// Always use pointer when work with mutexes!
+var (
+	mutex        = &sync.Mutex{}
+	countersChan chan *counters
+	mockStore    map[string]values
+	userStore    map[string](*userInfo) // Stimulating a databse that keeps users' info
+)
+
+func getSelectInfo(content string) string {
+	t := time.Now()
+	dd, mm, yy, hh, min, ss := t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second()
+	key := fmt.Sprintf("%s %d/%02d/%02d %02d:%02d:%02d ", content, dd, mm, yy, hh, min, ss)
+	return key
+}
+
+//These should be static and no need for rate limit
 func welcomeHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Welcome to EQ Works 😎")
 }
 
 func viewHandler(w http.ResponseWriter, r *http.Request) {
-	data := content[rand.Intn(len(content))]
+	data := contents[rand.Intn(len(contents))]
 
 	c.Lock()
 	c.view++
+	c.contentSelected = getSelectInfo(data)
 	c.Unlock()
 
 	err := processRequest(r)
@@ -43,6 +74,15 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 	if rand.Intn(100) < 50 {
 		processClick(data)
 	}
+
+	c.Lock()
+	countersChan <- &c
+	c.Unlock()
+
+	w.Header().Set("Content-type", "application/json")
+	w.WriteHeader(200)
+	json.NewEncoder(w).Encode(data)
+	return
 }
 
 func processRequest(r *http.Request) error {
@@ -59,24 +99,67 @@ func processClick(data string) error {
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request) {
-	if !isAllowed() {
+	if !isAllowed(r.RemoteAddr) {
 		w.WriteHeader(429)
+		fmt.Fprint(w, "Slow down, we don't do it here Flash")
 		return
 	}
+	w.Header().Set("Content-type", "application/json")
+	w.WriteHeader(200)
+	json.NewEncoder(w).Encode(mockStore)
+	return
 }
 
-func isAllowed() bool {
+const limit = 20
+const period = 60
+
+func isAllowed(ip string) bool {
+	// Rate limiter
+	if user, ok := userStore[ip]; ok {
+		currentTime := time.Now()
+		if user.reqCount < limit {
+			user.reqCount++
+			userStore[ip] = user
+			return true
+		}
+		timePassed := currentTime.Sub(user.timeStamp).Seconds()
+		if timePassed <= period {
+			return false
+		}
+		user.reqCount = 1
+		user.timeStamp = currentTime
+		userStore[ip] = user
+		return true
+	}
+	userStore[ip] = &userInfo{timeStamp: time.Now(), reqCount: 1}
 	return true
 }
 
 func uploadCounters() error {
-	return nil
+	// Clean implement of repetitive task
+	// https://stackoverflow.com/questions/16466320/is-there-a-way-to-do-repetitive-tasks-at-intervals
+	interval := time.NewTicker(5 * time.Second)
+	for {
+		select {
+		case <-interval.C:
+			data := <-countersChan
+			mutex.Lock()
+			mockStore[data.contentSelected] = values{Views: strconv.Itoa(data.view), Clicks: strconv.Itoa(data.click)}
+			mutex.Unlock()
+		}
+	}
 }
 
 func main() {
 	http.HandleFunc("/", welcomeHandler)
 	http.HandleFunc("/view/", viewHandler)
 	http.HandleFunc("/stats/", statsHandler)
+
+	countersChan = make(chan *counters)
+	mockStore = make(map[string]values)
+	userStore = make(map[string](*userInfo))
+
+	go uploadCounters()
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }

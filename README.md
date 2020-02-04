@@ -16,7 +16,7 @@ Try to leverage Golang's `channels` and/or `sync`.
 - Stimulating simple database (stores).
 - Request throttle based on users' IP address
 
-I am not really familiar with Go, so I tried to use the simplest way to solve this one. 
+I am not really familiar with Go, so I tried to use the most simple way. 
 
 ## How to run the app:
 - Install golang: https://golang.org/dl/

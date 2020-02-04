@@ -20,8 +20,8 @@ type counters struct {
 
 type values struct {
 	// JSON encoder can only see field starts with capital letter
-	Views  string `json:"views"`
-	Clicks string `json:"click"`
+	Views  string `json:"Views"`
+	Clicks string `json:"Clicks"`
 }
 
 type userInfo struct {
